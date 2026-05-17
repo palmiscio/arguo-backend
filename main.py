@@ -203,7 +203,7 @@ async def call_deepseek(client, query):
         r = await client.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-            json={"model": "qwen-qwq-32b", "max_tokens": 400,
+            json={"model": "qwen/qwen3-32b", "max_tokens": 400,
                   "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": query}]},
             timeout=30
         )
