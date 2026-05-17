@@ -117,9 +117,8 @@ async def call_gemini(client, query):
         r = await client.post(
             f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}",
             headers={"Content-Type": "application/json"},
-            json={"system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-                  "contents": [{"parts": [{"text": query}]}],
-                  "generationConfig": {"maxOutputTokens": 400}},
+            json={"contents": [{"parts": [{"text": SYSTEM_PROMPT + "\n\nQuestion: " + query}]}],
+      "generationConfig": {"maxOutputTokens": 400}},
             timeout=30
         )
         d = r.json()
