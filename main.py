@@ -115,7 +115,7 @@ async def call_gemini(client, query):
     t0 = time.time()
     try:
         r = await client.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_KEY}",
+            f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}",
             headers={"Content-Type": "application/json"},
             json={"system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
                   "contents": [{"parts": [{"text": query}]}],
