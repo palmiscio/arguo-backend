@@ -1,0 +1,259 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import httpx
+import asyncio
+import os
+import json
+import time
+
+app = FastAPI(title="Arguo API")
+
+# CORS — permette chiamate dal browser
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+# ── API Keys (da variabili d'ambiente) ──────────────────────
+ANTHROPIC_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
+OPENAI_KEY     = os.getenv("OPENAI_API_KEY", "")
+GEMINI_KEY     = os.getenv("GEMINI_API_KEY", "")
+MISTRAL_KEY    = os.getenv("MISTRAL_API_KEY", "")
+GROQ_KEY       = os.getenv("GROQ_API_KEY", "")
+PERPLEXITY_KEY = os.getenv("PERPLEXITY_API_KEY", "")
+
+SYSTEM_PROMPT = """You are a senior legal counsel with expertise in US, EU, Italian, and international law.
+Answer legal questions clearly and directly — like a trusted lawyer talking to a client, not an academic writing a paper.
+Be concise and practical. No headers, no bullet lists, no markdown formatting. Write in plain flowing prose.
+Cite the most relevant law or regulation naturally within the text when useful, but do not overload with citations.
+Always respond in the same language as the question.
+IMPORTANT: Keep responses under 200 words. Be direct and complete — never cut off mid-sentence. End with a one-sentence certainty level."""
+
+# ── Request/Response models ──────────────────────────────────
+class QueryRequest(BaseModel):
+    query: str
+
+class ModelResult(BaseModel):
+    id: str
+    name: str
+    text: str
+    ok: bool
+    skip: bool = False
+    latency_ms: int = 0
+    error: str = ""
+
+class ConsensusResponse(BaseModel):
+    results: list[ModelResult]
+    consensus_score: int
+    consensus_answer: str
+    divergences: str
+    model_alignments: dict
+
+# ── Callers ──────────────────────────────────────────────────
+
+async def call_claude(client: httpx.AsyncClient, query: str) -> ModelResult:
+    if not ANTHROPIC_KEY:
+        return ModelResult(id="claude", name="Claude", text="", ok=False, skip=True)
+    t0 = time.time()
+    try:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 4000, "system": SYSTEM_PROMPT,
+                  "messages": [{"role": "user", "content": query}]},
+            timeout=30
+        )
+        d = r.json()
+        if "error" in d:
+            raise Exception(d["error"]["message"])
+        text = d["content"][0]["text"]
+        return ModelResult(id="claude", name="Claude", text=text, ok=True, latency_ms=int((time.time()-t0)*1000))
+    except Exception as e:
+        return ModelResult(id="claude", name="Claude", text="", ok=False, error=str(e))
+
+async def call_gpt(client: httpx.AsyncClient, query: str) -> ModelResult:
+    if not OPENAI_KEY:
+        return ModelResult(id="gpt", name="GPT-4o", text="", ok=False, skip=True)
+    t0 = time.time()
+    try:
+        r = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"},
+            json={"model": "gpt-4o", "max_tokens": 4000,
+                  "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": query}]},
+            timeout=30
+        )
+        d = r.json()
+        if "error" in d:
+            raise Exception(d["error"]["message"])
+        text = d["choices"][0]["message"]["content"]
+        return ModelResult(id="gpt", name="GPT-4o", text=text, ok=True, latency_ms=int((time.time()-t0)*1000))
+    except Exception as e:
+        return ModelResult(id="gpt", name="GPT-4o", text="", ok=False, error=str(e))
+
+async def call_gemini(client: httpx.AsyncClient, query: str) -> ModelResult:
+    if not GEMINI_KEY:
+        return ModelResult(id="gemini", name="Gemini", text="", ok=False, skip=True)
+    t0 = time.time()
+    try:
+        r = await client.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={GEMINI_KEY}",
+            headers={"Content-Type": "application/json"},
+            json={"system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                  "contents": [{"parts": [{"text": query}]}],
+                  "generationConfig": {"maxOutputTokens": 4000}},
+            timeout=30
+        )
+        d = r.json()
+        if "error" in d:
+            raise Exception(d["error"]["message"])
+        text = d["candidates"][0]["content"]["parts"][0]["text"]
+        return ModelResult(id="gemini", name="Gemini", text=text, ok=True, latency_ms=int((time.time()-t0)*1000))
+    except Exception as e:
+        return ModelResult(id="gemini", name="Gemini", text="", ok=False, error=str(e))
+
+async def call_mistral(client: httpx.AsyncClient, query: str) -> ModelResult:
+    if not MISTRAL_KEY:
+        return ModelResult(id="mistral", name="Mistral", text="", ok=False, skip=True)
+    t0 = time.time()
+    try:
+        r = await client.post(
+            "https://api.mistral.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {MISTRAL_KEY}", "Content-Type": "application/json"},
+            json={"model": "mistral-large-latest", "max_tokens": 4000,
+                  "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": query}]},
+            timeout=30
+        )
+        d = r.json()
+        if "error" in d:
+            raise Exception(str(d["error"]))
+        text = d["choices"][0]["message"]["content"]
+        return ModelResult(id="mistral", name="Mistral", text=text, ok=True, latency_ms=int((time.time()-t0)*1000))
+    except Exception as e:
+        return ModelResult(id="mistral", name="Mistral", text="", ok=False, error=str(e))
+
+async def call_groq(client: httpx.AsyncClient, query: str) -> ModelResult:
+    if not GROQ_KEY:
+        return ModelResult(id="groq", name="Llama 3 (Groq)", text="", ok=False, skip=True)
+    t0 = time.time()
+    try:
+        r = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile", "max_tokens": 1500,
+                  "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": query}]},
+            timeout=30
+        )
+        d = r.json()
+        if "error" in d:
+            raise Exception(str(d["error"]))
+        text = d["choices"][0]["message"]["content"]
+        return ModelResult(id="groq", name="Llama 3 (Groq)", text=text, ok=True, latency_ms=int((time.time()-t0)*1000))
+    except Exception as e:
+        return ModelResult(id="groq", name="Llama 3 (Groq)", text="", ok=False, error=str(e))
+
+async def call_perplexity(client: httpx.AsyncClient, query: str) -> ModelResult:
+    if not PERPLEXITY_KEY:
+        return ModelResult(id="perplexity", name="Perplexity", text="", ok=False, skip=True)
+    t0 = time.time()
+    try:
+        r = await client.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={"Authorization": f"Bearer {PERPLEXITY_KEY}", "Content-Type": "application/json"},
+            json={"model": "llama-3.1-sonar-large-128k-online", "max_tokens": 4000,
+                  "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": query}]},
+            timeout=30
+        )
+        d = r.json()
+        if "error" in d:
+            raise Exception(str(d["error"]))
+        text = d["choices"][0]["message"]["content"]
+        return ModelResult(id="perplexity", name="Perplexity", text=text, ok=True, latency_ms=int((time.time()-t0)*1000))
+    except Exception as e:
+        return ModelResult(id="perplexity", name="Perplexity", text="", ok=False, error=str(e))
+
+# ── Synthesis ────────────────────────────────────────────────
+
+async def synthesize(client: httpx.AsyncClient, query: str, results: list[ModelResult]) -> dict:
+    valid = [r for r in results if r.ok and r.text]
+    if not valid:
+        return {"consensusScore": 0, "consensusAnswer": "Nessuna risposta disponibile.", "divergences": "", "modelAlignments": {}}
+
+    align_keys = ", ".join([f'"{r.name}": "<agree|partial|disagree>"' for r in valid])
+    responses_text = "\n\n".join([f"=== {r.name} ===\n{r.text}" for r in valid])
+
+    prompt = f"""Sei un verificatore legale. Analizza queste {len(valid)} risposte AI allo stesso quesito e produci SOLO un oggetto JSON valido, senza testo aggiuntivo.
+
+QUESITO: {query}
+
+{responses_text}
+
+JSON richiesto (nessun testo fuori dal JSON):
+{{"consensusScore":<0-100>,"consensusAnswer":"<risposta verificata in italiano, max 3 paragrafi>","divergences":"<divergenze principali, stringa vuota se allineate>","modelAlignments":{{{align_keys}}}}}"""
+
+    try:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 4000,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=30
+        )
+        d = r.json()
+        raw = d["content"][0]["text"]
+        return json.loads(raw.replace("```json", "").replace("```", "").strip())
+    except Exception as e:
+        return {"consensusScore": 50, "consensusAnswer": valid[0].text[:500], "divergences": "", "modelAlignments": {}}
+
+# ── Endpoints ────────────────────────────────────────────────
+
+@app.get("/")
+def root():
+    active = []
+    if ANTHROPIC_KEY:  active.append("claude")
+    if OPENAI_KEY:     active.append("gpt")
+    if GEMINI_KEY:     active.append("gemini")
+    if MISTRAL_KEY:    active.append("mistral")
+    if GROQ_KEY:       active.append("groq")
+    if PERPLEXITY_KEY: active.append("perplexity")
+    return {"status": "ok", "service": "Arguo API", "active_models": active}
+
+@app.post("/analyze", response_model=ConsensusResponse)
+async def analyze(req: QueryRequest):
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="Query vuota")
+
+    async with httpx.AsyncClient() as client:
+        # Chiama tutti i modelli in parallelo
+        results = await asyncio.gather(
+            call_claude(client, req.query),
+            call_gpt(client, req.query),
+            call_gemini(client, req.query),
+            call_mistral(client, req.query),
+            call_groq(client, req.query),
+            call_perplexity(client, req.query),
+        )
+        results = list(results)
+
+        if not any(r.ok for r in results):
+            raise HTTPException(status_code=503, detail="Nessun modello disponibile")
+
+        # Sintetizza il consenso
+        syn = await synthesize(client, req.query, results)
+
+    return ConsensusResponse(
+        results=results,
+        consensus_score=syn.get("consensusScore", 50),
+        consensus_answer=syn.get("consensusAnswer", ""),
+        divergences=syn.get("divergences", ""),
+        model_alignments=syn.get("modelAlignments", {}),
+    )
+
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
